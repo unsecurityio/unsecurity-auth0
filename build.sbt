@@ -4,7 +4,7 @@ organization := "io.unsecurity"
 
 name := "unsecurity-auth0"
 
-version := "0.1"
+version := "0.1-SNAPSHOT"
 
 scalaVersion := "2.12.8"
 
@@ -15,11 +15,11 @@ scalacOptions := Seq(
   "-Ywarn-value-discard"
 )
 
-val circeVersion = "0.10.1"
-val http4sVersion = "0.20.0-M4"
-val directivesVersion = "0.20.0-M4-1"
-
 libraryDependencies := Seq(
-  "io.unsecurity" %% "unsecurity-core" % "0.1",
-  "org.scalatest" %% "scalatest" % "3.0.5" % Test
+  "io.unsecurity"        %% "unsecurity-core" % "0.1",
+  "com.squareup.okhttp3" % "okhttp"           % "3.9.0",
+  "com.auth0"            % "auth0"            % "1.5.1",
+  "com.auth0"            % "jwks-rsa"         % "0.3.0",
+  "com.auth0"            % "java-jwt"         % "3.3.0",
+  "org.scalatest"        %% "scalatest"       % "3.0.5" % Test
 )
