@@ -1,4 +1,5 @@
 package io.unsecurity.auth
+package auth0
 
 import java.net.URI
 

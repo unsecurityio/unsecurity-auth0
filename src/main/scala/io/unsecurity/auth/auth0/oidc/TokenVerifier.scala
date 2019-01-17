@@ -1,22 +1,23 @@
-package io.unsecurity.auth.oidc
+package io.unsecurity.auth
+package auth0
+package oidc
 
 import java.security.interfaces.{RSAPrivateKey, RSAPublicKey}
-import java.time._
+import java.time.{Instant, OffsetDateTime, ZoneId, ZoneOffset}
 
 import com.auth0.jwt.JWT
 import com.auth0.jwt.algorithms.Algorithm
 import com.auth0.jwt.interfaces.RSAKeyProvider
-import io.circe.parser.decode
-import io.unsecurity.auth.oidc.Jwt.JwtPayload
+import io.unsecurity.auth.auth0.oidc.Jwt.JwtPayload
 import org.apache.commons.codec.binary.Base64
-import unsecurity.auth0.oidc.OidcAuthenticatedUser
+import io.circe.parser._
 
 object TokenVerifier {
 
   def decodeBase64(value: String): String = new String(Base64.decodeBase64(value), "UTF-8")
 
   // Private Key is stored at IdP and not in our application, hence exception throwing
-  def createPublicKeyProvider(publicKey: RSAPublicKey) = {
+  def createPublicKeyProvider(publicKey: RSAPublicKey): RSAKeyProvider = {
     new RSAKeyProvider {
 
       override def getPrivateKeyId =

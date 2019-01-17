@@ -1,4 +1,6 @@
-package io.unsecurity.auth.oidc
+package io.unsecurity.auth
+package auth0
+package oidc
 
 import io.circe.Decoder
 

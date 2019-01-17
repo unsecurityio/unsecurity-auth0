@@ -1,4 +1,6 @@
-package io.unsecurity.auth.oidc
+package io.unsecurity.auth
+package auth0
+package oidc
 
 import java.net.URI
 import java.security.SecureRandom
@@ -11,25 +13,23 @@ import com.auth0.jwk.{GuavaCachedJwkProvider, UrlJwkProvider}
 import com.auth0.jwt.JWT
 import com.auth0.jwt.algorithms.Algorithm
 import com.auth0.jwt.interfaces.DecodedJWT
-import io.circe.parser.{decode => cDecode}
 import io.circe.{Decoder, Encoder, Json}
 import io.unsecurity.Unsecurity2
-import io.unsecurity.auth.AuthConfig
-import io.unsecurity.auth.oidc.Jwt.JwtHeader
 import io.unsecurity.hlinx.HLinx.{HLinx, HNil}
 import no.scalabin.http4s.directives.Directive
-import okhttp3._
+import okhttp3.{MediaType, OkHttpClient, Request, RequestBody}
 import okio.ByteString
 import org.apache.commons.codec.binary.Hex
 import org.http4s.{Method, RequestCookie, Response, ResponseCookie, Status}
 import org.slf4j.{Logger, LoggerFactory}
-import unsecurity.auth0.oidc.OidcAuthenticatedUser
+import io.circe.parser.{decode => cDecode}
+import io.unsecurity.auth.auth0.oidc.Jwt.JwtHeader
 
 case class OidcEndpoints[F[_]: Sync, U](
     unsecurity2: Unsecurity2[F, U],
     authConfig: AuthConfig,
     baseUrl: HLinx[HNil],
-    stateStore: StateStore,
+    stateStore: SessionStore,
     cookieName: String
 ) {
   val log: Logger          = LoggerFactory.getLogger(classOf[OidcEndpoints[F, U]])
@@ -319,18 +319,3 @@ case class OidcEndpoints[F[_]: Sync, U](
   }
 
 }
-
-trait StateStore {
-  def storeState(stateRef: String, state: String, returnToUrl: URI, callbackUrl: URI): Unit
-  def getState(stateRef: String): Option[State]
-  def removeState(stateRef: String): Unit
-  def storeSession(key: String, content: OidcAuthenticatedUser): Unit
-  def getSession(key: String): Option[OidcAuthenticatedUser]
-  def removeSession(key: String): Unit
-}
-
-case class State(
-    state: String,
-    returnToUrl: URI,
-    callbackUrl: URI
-)
