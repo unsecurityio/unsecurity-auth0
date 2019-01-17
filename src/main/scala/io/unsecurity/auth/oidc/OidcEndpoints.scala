@@ -11,24 +11,24 @@ import com.auth0.jwk.{GuavaCachedJwkProvider, UrlJwkProvider}
 import com.auth0.jwt.JWT
 import com.auth0.jwt.algorithms.Algorithm
 import com.auth0.jwt.interfaces.DecodedJWT
+import io.circe.parser.{decode => cDecode}
 import io.circe.{Decoder, Encoder, Json}
-import io.unsecurity.{Unsecurity2, UnsecurityOps}
+import io.unsecurity.Unsecurity2
 import io.unsecurity.auth.AuthConfig
-import io.unsecurity.hlinx.HLinx.{HLinx, HList, HNil, Root}
+import io.unsecurity.auth.oidc.Jwt.JwtHeader
+import io.unsecurity.hlinx.HLinx.{HLinx, HNil}
 import no.scalabin.http4s.directives.Directive
 import okhttp3._
 import okio.ByteString
 import org.apache.commons.codec.binary.Hex
-import org.http4s.{Method, RequestCookie, Response, ResponseCookie}
+import org.http4s.{Method, RequestCookie, Response, ResponseCookie, Status}
 import org.slf4j.{Logger, LoggerFactory}
-import io.circe.parser.{decode => cDecode}
-import io.unsecurity.auth.oidc.Jwt.JwtHeader
 import unsecurity.auth0.oidc.OidcAuthenticatedUser
 
 case class OidcEndpoints[F[_]: Sync, U](
     unsecurity2: Unsecurity2[F, U],
     authConfig: AuthConfig,
-    baseUrl : HLinx[HNil],
+    baseUrl: HLinx[HNil],
     stateStore: StateStore,
     cookieName: String
 ) {
@@ -87,7 +87,7 @@ case class OidcEndpoints[F[_]: Sync, U](
           returnToUrl = if (isReturnUrlWhitelisted(state.returnToUrl)) {
             state.returnToUrl
           } else {
-            log.warn(s"/callback returnToUrl (${state.returnToUrl}) not whitelisted")
+            log.warn(s"/callback returnToUrl (${state.returnToUrl}) not whitelisted; falling back to ${authConfig.defaultReturnToUrl}")
             authConfig.defaultReturnToUrl
           }
           _ = stateStore.removeState(stateCookie.content)
@@ -102,7 +102,32 @@ case class OidcEndpoints[F[_]: Sync, U](
       }
     )
 
-  val endpoints = List(login, callback)
+  val logout =
+    unsecure(
+      Endpoint(
+        method = Method.GET,
+        path = baseUrl / "logout"
+      )
+    ).run(
+      _ =>
+        for {
+          cookie <- sessionCookie
+          _      = stateStore.removeSession(cookie.content)
+          _ <- break(
+                Redirect(authConfig.afterLogoutUrl)
+                  .addCookie(
+                    ResponseCookie(name = Cookies.Keys.K_SESSION_ID, content = "", maxAge = Option(-1))
+                  )
+                  .addCookie(
+                    ResponseCookie(name = Cookies.Keys.XSRF, content = "", maxAge = Option(-1), httpOnly = false)
+                  )
+              )
+        } yield {
+          ()
+      }
+    )
+
+  val endpoints = List(login, callback, logout)
 
   def isReturnUrlWhitelisted(uri: URI): Boolean = {
     authConfig.returnToUrlDomainWhitelist.contains(uri.getHost)
@@ -143,6 +168,20 @@ case class OidcEndpoints[F[_]: Sync, U](
           )
           BadRequest("Illegal state value")
         }
+    }
+  }
+
+  def sessionCookie: Directive[F, RequestCookie] = {
+    for {
+      cookies <- requestCookies()
+      cookie <- cookies
+                 .find(c => c.name == cookieName)
+                 .map(c => Directive.success(c))
+                 .getOrElse(
+                   Directive.failure(ResponseJson("Session cookie not found. Please login", Status.Unauthorized))
+                 )
+    } yield {
+      cookie
     }
   }
 
@@ -287,6 +326,7 @@ trait StateStore {
   def removeState(stateRef: String): Unit
   def storeSession(key: String, content: OidcAuthenticatedUser): Unit
   def getSession(key: String): Option[OidcAuthenticatedUser]
+  def removeSession(key: String): Unit
 }
 
 case class State(
