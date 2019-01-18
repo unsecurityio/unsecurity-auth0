@@ -11,12 +11,12 @@ import no.scalabin.http4s.directives.Directive
 import org.http4s.{Method, Response, ResponseCookie}
 import org.slf4j.{Logger, LoggerFactory}
 
-class Auth0OidcUnsecurity[F[_]: Sync](authConfig: AuthConfig, baseUrl: HLinx[HNil], sessionStore: SessionStore[OidcAuthenticatedUser])
-    extends Unsecurity2[F, OidcAuthenticatedUser] {
+class Auth0OidcUnsecurity[F[_]: Sync, U](baseUrl: HLinx[HNil],
+                                      val sc: Auth0OidcSecurityContext[F, U]
+                                     )
+    extends Unsecurity2[F, OidcAuthenticatedUser, U] {
 
-  private val log: Logger          = LoggerFactory.getLogger(classOf[Auth0OidcUnsecurity[F]])
-
-  override val sc: Auth0OidcSecurityContext[F] = new Auth0OidcSecurityContext[F](authConfig, sessionStore)
+  private val log: Logger          = LoggerFactory.getLogger(classOf[Auth0OidcUnsecurity[F, U]])
 
   val login =
     unsecure(
@@ -32,10 +32,10 @@ class Auth0OidcUnsecurity[F[_]: Sync](authConfig: AuthConfig, baseUrl: HLinx[HNi
           auth0CallbackUrlParam <- queryParam("auth0Callback").map(_.map(URI.create))
           _                     = log.trace("/login auth0CallbackUrlParam: {}", auth0CallbackUrlParam)
           state                 = sc.randomString(32)
-          callbackUrl           = auth0CallbackUrlParam.getOrElse(authConfig.defaultAuth0CallbackUrl)
-          returnToUrl           = returnToUrlParam.getOrElse(authConfig.defaultReturnToUrl)
+          callbackUrl           = auth0CallbackUrlParam.getOrElse(sc.authConfig.defaultAuth0CallbackUrl)
+          returnToUrl           = returnToUrlParam.getOrElse(sc.authConfig.defaultReturnToUrl)
           stateCookie           = sc.Cookies.createStateCookie(secureCookie = callbackUrl.getScheme.equalsIgnoreCase("https"))
-          _                     = sessionStore.storeState(stateCookie.content, state, returnToUrl, callbackUrl)
+          _                     = sc.sessionStore.storeState(stateCookie.content, state, returnToUrl, callbackUrl)
           auth0Url              = sc.createAuth0Url(state, callbackUrl)
           _                     <- break(Redirect(auth0Url).addCookie(stateCookie))
         } yield {
@@ -65,15 +65,15 @@ class Auth0OidcUnsecurity[F[_]: Sync](authConfig: AuthConfig, baseUrl: HLinx[HNi
           sessionCookie = sc.Cookies.createSessionCookie(
             secureCookie = state.callbackUrl.getScheme.equalsIgnoreCase("https")
           )
-          _ = sessionStore.storeSession(sessionCookie.content, oidcUser)
+          _ = sc.sessionStore.storeSession(sessionCookie.content, oidcUser)
           returnToUrl = if (sc.isReturnUrlWhitelisted(state.returnToUrl)) {
             state.returnToUrl
           } else {
             log.warn(
-              s"/callback returnToUrl (${state.returnToUrl}) not whitelisted; falling back to ${authConfig.defaultReturnToUrl}")
-            authConfig.defaultReturnToUrl
+              s"/callback returnToUrl (${state.returnToUrl}) not whitelisted; falling back to ${sc.authConfig.defaultReturnToUrl}")
+            sc.authConfig.defaultReturnToUrl
           }
-          _ = sessionStore.removeState(stateCookie.content)
+          _ = sc.sessionStore.removeState(stateCookie.content)
           _ <- break(
                 Redirect(returnToUrl)
                   .addCookie(ResponseCookie(name = sc.Cookies.Keys.STATE, content = "", maxAge = Option(-1)))
@@ -96,9 +96,9 @@ class Auth0OidcUnsecurity[F[_]: Sync](authConfig: AuthConfig, baseUrl: HLinx[HNi
       _ =>
         for {
           cookie <- sc.sessionCookie
-          _      = sessionStore.removeSession(cookie.content)
+          _      = sc.sessionStore.removeSession(cookie.content)
           _ <- break(
-                Redirect(authConfig.afterLogoutUrl)
+                Redirect(sc.authConfig.afterLogoutUrl)
                   .addCookie(
                     ResponseCookie(name = sc.Cookies.Keys.K_SESSION_ID, content = "", maxAge = Option(-1))
                   )

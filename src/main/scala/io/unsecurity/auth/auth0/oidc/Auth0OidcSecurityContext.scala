@@ -1,4 +1,5 @@
 package io.unsecurity.auth.auth0.oidc
+
 import java.net.URI
 import java.security.SecureRandom
 import java.security.interfaces.RSAPublicKey
@@ -23,17 +24,44 @@ import io.circe.parser.{decode => cDecode}
 import io.unsecurity.auth.auth0.oidc.Jwt.JwtHeader
 import okio.ByteString
 
-class Auth0OidcSecurityContext[F[_]: Sync](
-    authConfig: AuthConfig,
-    sessionStore: SessionStore[OidcAuthenticatedUser]
-) extends SecurityContext[F, OidcAuthenticatedUser]
-    with UnsecurityOps[F] {
-  val log: Logger          = LoggerFactory.getLogger(classOf[Auth0OidcSecurityContext[F]])
+class Auth0OidcSecurityContext[F[_] : Sync, U](val authConfig: AuthConfig,
+                                               val sessionStore: SessionStore[OidcAuthenticatedUser],
+                                               lookup: OidcAuthenticatedUser => Option[U]
+                                              ) extends SecurityContext[F, OidcAuthenticatedUser, U]
+  with UnsecurityOps[F] {
+  val log: Logger = LoggerFactory.getLogger(classOf[Auth0OidcSecurityContext[F, U]])
   val client: OkHttpClient = new OkHttpClient
 
-  override def authenticate: Directive[F, OidcAuthenticatedUser]                               = ???
-  override def xsrfCheck: Directive[F, String]                                                 = ???
-  override def rateLimitCheck(authenticatedIdentity: OidcAuthenticatedUser): Directive[F, Int] = ???
+  override def transformUser(u: OidcAuthenticatedUser): Option[U] = lookup(u)
+
+  override def authenticate: Directive[F, OidcAuthenticatedUser] = {
+    log.trace("trying to authenticate")
+    for {
+      sessionCookie <- sessionCookie
+      userProfile <- userSession(sessionCookie)
+    } yield {
+      userProfile
+    }
+  }
+
+  override def xsrfCheck: Directive[F, String] = {
+    log.trace("checking xsrf")
+    ???
+  }
+
+  override def rateLimitCheck(authenticatedIdentity: OidcAuthenticatedUser): Directive[F, Int] = {
+    log.trace("rateLimit")
+    ???
+  }
+
+  def userSession(cookie: RequestCookie): Directive[F, OidcAuthenticatedUser] = {
+    sessionStore.getSession(cookie.content) match {
+      case Some(user) => Directive.success(user)
+      case None =>
+        log.warn("Could not extract user profile: {}, session timed out")
+        Unauthorized("Could not extract user profile from the cookie")
+    }
+  }
 
   def createAuth0Url(state: String, auth0CallbackUrl: URI): String = {
     new AuthAPI(authConfig.authDomain, authConfig.clientId, authConfig.clientSecret)
@@ -69,32 +97,32 @@ class Auth0OidcSecurityContext[F[_]: Sync](
     for {
       cookies <- requestCookies()
       cookie <- cookies
-                 .find(c => c.name == authConfig.cookieName)
-                 .map(c => Directive.success(c))
-                 .getOrElse(
-                   Directive.failure(ResponseJson("Session cookie not found. Please login", Status.Unauthorized))
-                 )
+        .find(c => c.name == authConfig.cookieName)
+        .map(c => Directive.success(c))
+        .getOrElse(
+          Directive.failure(ResponseJson("Session cookie not found. Please login", Status.Unauthorized))
+        )
     } yield {
       cookie
     }
   }
 
   def fetchTokenFromAuth0(code: String, auth0CallbackUrl: URI): Directive[F, TokenResponse] = {
-    val tokenUrl: String         = s"https://${authConfig.authDomain}/oauth/token"
+    val tokenUrl: String = s"https://${authConfig.authDomain}/oauth/token"
     val jsonMediaType: MediaType = MediaType.parse("application/json; charset=utf-8")
     val payload: String = TokenRequest(grantType = "authorization_code",
-                                       clientId = authConfig.clientId,
-                                       clientSecret = authConfig.clientSecret,
-                                       code = code,
-                                       redirectUri = auth0CallbackUrl).asJson.noSpaces
+      clientId = authConfig.clientId,
+      clientSecret = authConfig.clientSecret,
+      code = code,
+      redirectUri = auth0CallbackUrl).asJson.noSpaces
     val req: Request = new okhttp3.Request.Builder()
       .url(tokenUrl)
       .post(RequestBody.create(jsonMediaType, payload))
       .build()
 
-    val resp              = client.newCall(req).execute
+    val resp = client.newCall(req).execute
     val responseCode: Int = resp.code()
-    val body: String      = resp.body.string
+    val body: String = resp.body.string
     resp.body.close()
 
     if (responseCode == 200) {
@@ -115,17 +143,17 @@ class Auth0OidcSecurityContext[F[_]: Sync](
 
     val numberOfKeys = 10
 
-    val provider: UrlJwkProvider                       = new UrlJwkProvider(s"https://${authConfig.authDomain}/.well-known/jwks.json")
-    val cachedProvider                                 = new GuavaCachedJwkProvider(provider, numberOfKeys, 5L, TimeUnit.HOURS)
-    val decodedJwt: DecodedJWT                         = JWT.decode(tokenResponse.idToken)
-    val decodedHeaderString                            = decodeBase64(decodedJwt.getHeader)
+    val provider: UrlJwkProvider = new UrlJwkProvider(s"https://${authConfig.authDomain}/.well-known/jwks.json")
+    val cachedProvider = new GuavaCachedJwkProvider(provider, numberOfKeys, 5L, TimeUnit.HOURS)
+    val decodedJwt: DecodedJWT = JWT.decode(tokenResponse.idToken)
+    val decodedHeaderString = decodeBase64(decodedJwt.getHeader)
     val decodedEitherHeader: Either[String, JwtHeader] = cDecode[JwtHeader](decodedHeaderString).left.map(_.getMessage)
 
     val eitherUser: Either[String, OidcAuthenticatedUser] = for {
-      header    <- decodedEitherHeader
+      header <- decodedEitherHeader
       publicKey = cachedProvider.get(header.kid).getPublicKey.asInstanceOf[RSAPublicKey]
-      alg       = Algorithm.RSA256(TokenVerifier.createPublicKeyProvider(publicKey))
-      oidcUser  <- TokenVerifier.validateIdToken(alg, authConfig.authDomain, authConfig.clientId, tokenResponse.idToken)
+      alg = Algorithm.RSA256(TokenVerifier.createPublicKeyProvider(publicKey))
+      oidcUser <- TokenVerifier.validateIdToken(alg, authConfig.authDomain, authConfig.clientId, tokenResponse.idToken)
     } yield {
       oidcUser
     }
@@ -137,7 +165,7 @@ class Auth0OidcSecurityContext[F[_]: Sync](
   }
 
   def randomString(lengthInBytes: Int): String = {
-    val secrand: SecureRandom  = new SecureRandom()
+    val secrand: SecureRandom = new SecureRandom()
     val byteArray: Array[Byte] = Array.fill[Byte](lengthInBytes)(0)
     secrand.nextBytes(byteArray)
 
@@ -147,9 +175,9 @@ class Auth0OidcSecurityContext[F[_]: Sync](
   object Cookies {
 
     object Keys {
-      val STATE: String        = "statecookie"
+      val STATE: String = "statecookie"
       val K_SESSION_ID: String = authConfig.cookieName
-      val XSRF: String         = "xsrf-token"
+      val XSRF: String = "xsrf-token"
     }
 
     def createXsrfCookie(secureCookie: Boolean): ResponseCookie = {
@@ -188,6 +216,7 @@ class Auth0OidcSecurityContext[F[_]: Sync](
 }
 
 case class TokenRequest(grantType: String, clientId: String, clientSecret: String, code: String, redirectUri: URI)
+
 object TokenRequest {
   implicit val tokenRequestEncoder: Encoder[TokenRequest] = Encoder { tr =>
     Json.obj(
@@ -201,13 +230,14 @@ object TokenRequest {
 }
 
 case class TokenResponse(accessToken: String, expiresIn: Long, idToken: String, tokenType: String)
+
 object TokenResponse {
   implicit val tokenResponseDecoder: Decoder[TokenResponse] = Decoder { c =>
     for {
       accessToken <- c.downField("access_token").as[String]
-      expiresIn   <- c.downField("expires_in").as[Long]
-      idToken     <- c.downField("id_token").as[String]
-      tokenType   <- c.downField("token_type").as[String]
+      expiresIn <- c.downField("expires_in").as[Long]
+      idToken <- c.downField("id_token").as[String]
+      tokenType <- c.downField("token_type").as[String]
     } yield {
       TokenResponse(
         accessToken,
