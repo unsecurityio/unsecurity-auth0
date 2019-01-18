@@ -10,4 +10,5 @@ case class AuthConfig(clientId: String,
                       defaultReturnToUrl: URI,
                       returnToUrlDomainWhitelist: List[String],
                       afterLogoutUrl: URI,
-                      sessionCookieTtl: Minutes)
+                      sessionCookieTtl: Minutes,
+                      cookieName: String)
