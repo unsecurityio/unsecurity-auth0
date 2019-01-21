@@ -45,8 +45,64 @@ class Auth0OidcSecurityContext[F[_] : Sync, U](val authConfig: AuthConfig,
   }
 
   override def xsrfCheck: Directive[F, String] = {
-    log.trace("checking xsrf")
-    ???
+    for {
+      xForwardedFor   <- requestHeader("X-Forwarded-For")
+      xsrfHeader      <- xsrfHeader(xForwardedFor.map(_.value))
+      xsrfCookie      <- xsrfCookie()
+      validatedHeader <- validateXsrf(xsrfHeader, xsrfCookie, xForwardedFor.map(_.value))
+    } yield {
+      validatedHeader
+    }
+  }
+
+  def validateXsrf(xsrfHeader: String, xsrfCookievalue: String, xForwardedFor: Option[String]): Directive[F, String] = {
+    if (xsrfCookievalue == xsrfHeader) {
+      Directive.success(xsrfHeader)
+    } else {
+      log.error(
+        s"XsrfCookie does not match Xsrf header, possible CSRF-Attack! X-Forwarded-For: ${xForwardedFor.getOrElse("")}"
+      )
+      Directive.failure(
+        ResponseJson("xsrf check failed", Status.BadRequest)
+      )
+    }
+  }
+
+  def xsrfHeader(xForwardedFor: Option[String]): Directive[F, String] = {
+    for {
+      header <- requestHeader("x-xsrf-token")
+      xsrfToken <- header match {
+        case Some(xsrfToken) => Directive.success(xsrfToken.value)
+        case None =>
+          log.error("No x-xsrf-token header, possible CSRF-attack!")
+          Directive.failure(
+            ResponseJson(
+              s"No x-xsrf-token header found. X-Forwarded-For: ${xForwardedFor.getOrElse("")}",
+              Status.BadRequest
+            )
+          )
+      }
+    } yield {
+      xsrfToken
+    }
+  }
+
+  def xsrfCookie(): Directive[F, String] = {
+    for {
+      cookies       <- requestCookies()
+      xForwardedfor <- requestHeader("X-Forwarded-For")
+      xsrfCookie <- cookies
+        .find(c => c.name == "xsrf-token") match {
+        case Some(xstrfCookie) => Directive.success(xstrfCookie.content)
+        case None =>
+          log.error(s"No xsrf-cookie, possible CSRF-Attack from ${xForwardedfor.map(_.value).getOrElse("")}")
+          Directive.failure(
+            ResponseJson("No xsrf-token cookie found", Status.BadRequest)
+          )
+      }
+    } yield {
+      xsrfCookie
+    }
   }
 
   override def rateLimitCheck(authenticatedIdentity: OidcAuthenticatedUser): Directive[F, Int] = {
