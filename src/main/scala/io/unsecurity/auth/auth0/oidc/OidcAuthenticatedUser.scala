@@ -19,6 +19,8 @@ case class OidcAuthenticatedUser(nickname: Option[String],
                                  issuedAt: Long,
                                  expirationTime: Long,
                                  userId: UserId)
+  extends AuthenticatedUserWithMeta
+
 object OidcAuthenticatedUser {
   implicit val authenticatedUserEncoder: Encoder[OidcAuthenticatedUser] = Encoder { au =>
     Json.obj(
